@@ -133,9 +133,10 @@ use LWP::UserAgent::Determined;
 use URI::Escape qw(uri_escape_utf8);
 use XML::LibXML;
 use XML::LibXML::XPathContext;
+use Net::Amazon::Auth::FixedCredentialsProvider;
+use Net::Amazon::Auth::CredentialsProviderChain;
 
-has 'aws_access_key_id'     => ( is => 'ro', isa => 'Str', required => 1 );
-has 'aws_secret_access_key' => ( is => 'ro', isa => 'Str', required => 1 );
+has 'credentials_provider' => ( is => 'ro', isa => 'Net::Amazon::Auth::CredentialsProvider', required => 0, default => sub { return Net::Amazon::Auth::CredentialsProviderChain->default_chain; } );
 has 'secure' => ( is => 'ro', isa => 'Bool', required => 0, default => 0 );
 has 'timeout' => ( is => 'ro', isa => 'Num',  required => 0, default => 30 );
 has 'retry'   => ( is => 'ro', isa => 'Bool', required => 0, default => 0 );
@@ -144,7 +145,23 @@ has 'libxml' => ( is => 'rw', isa => 'XML::LibXML',    required => 0 );
 has 'ua'     => ( is => 'rw', isa => 'LWP::UserAgent', required => 0 );
 has 'err'    => ( is => 'rw', isa => 'Maybe[Str]',     required => 0 );
 has 'errstr' => ( is => 'rw', isa => 'Maybe[Str]',     required => 0 );
-has 'aws_session_token' => ( is => 'ro', isa => 'Str', required => 0 );
+
+around BUILDARGS => sub {
+    my $orig = shift;
+    my $class = shift;
+
+    my $args = $class->$orig(@_);
+
+    if (exists $args->{aws_access_key_id}) {
+        $args->{credentials_provider} = Net::Amazon::Auth::FixedCredentialsProvider->new({
+                access_key_id => $args->{aws_access_key_id},
+                secret_access_key => $args->{aws_secret_access_key},
+                session_token => $args->{aws_session_token}
+            });
+        delete @{$args}{qw(aws_access_key_id aws_secret_access_key aws_session_token)};
+    }
+    return $args;
+};
 
 __PACKAGE__->meta->make_immutable;
 
@@ -223,6 +240,24 @@ sub BUILD {
 
     $self->ua($ua);
     $self->libxml( XML::LibXML->new );
+
+    die "No AWS credentials found!" unless defined $self->credentials_provider->get_credentials->{access_key_id};
+}
+
+# Backwards compatibility
+sub aws_access_key_id {
+    my $self = shift;
+    return $self->credentials_provider->get_credentials->{access_key_id};
+}
+
+sub aws_secret_access_key {
+    my $self = shift;
+    return $self->credentials_provider->get_credentials->{secret_access_key};
+}
+
+sub aws_session_token {
+    my $self = shift;
+    return $self->credentials_provider->get_credentials->{session_token};
 }
 
 =head2 buckets
